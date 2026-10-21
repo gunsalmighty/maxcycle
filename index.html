@@ -189,6 +189,10 @@ textarea.txt{padding:10px 12px;min-height:84px;resize:vertical}
 .acclist div{display:flex;justify-content:space-between;gap:12px;font-size:14px}
 .acclist span:first-child{min-width:0;overflow-wrap:anywhere}
 .acclist span:last-child{color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;flex:none}
+.eta{color:var(--muted);font-weight:400;font-size:14px}
+.supr{display:grid;grid-template-columns:minmax(0,1fr) 40px;align-items:center;gap:6px;font-weight:600}
+.supr small{color:var(--muted);font-weight:400;margin-left:4px}
+.supr .rm{width:40px;height:40px;background:none;border:0;color:var(--muted);font-size:22px}
 .accb{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
 .accb .top2{display:grid;grid-template-columns:minmax(0,1fr) 40px;gap:6px;align-items:center}
 .accb .rm{width:40px;height:44px;background:none;border:0;color:var(--muted);font-size:22px}
@@ -232,6 +236,8 @@ const WEEKS=[
 
 // Accessories follow a gentler wave on their own "working weight": the weight you can lift for the target reps with a hard last rep.
 const ACCP=[.80,.875,.95];
+// Light practice sets for a main lift on another day: 3 sets, always lighter than that lift's heavy day.
+const SUP=[[[.60,5],[.60,5],[.60,5]],[[.65,5],[.65,5],[.65,5]],[[.70,3],[.70,3],[.70,3]]];
 const LIB={
   'Incline Dumbbell Press':[3,10],'Incline Barbell Press':[3,8],'Dumbbell Bench Press':[3,10],'Close-Grip Bench Press':[3,8],'Cable Fly':[3,12],'Pec Deck':[3,12],
   'Overhead Press':[3,8],'Dumbbell Shoulder Press':[3,10],'Lateral Raise':[3,15],'Rear Delt Fly':[3,15],'Face Pull':[3,15],
@@ -240,7 +246,14 @@ const LIB={
   'Barbell Row':[3,8],'Dumbbell Row':[3,10],'Lat Pulldown':[3,10],'Seated Cable Row':[3,12],'Chest-Supported Row':[3,10],'Straight-Arm Pulldown':[3,12],'Shrug':[3,12],
   'Leg Press':[3,10],'Leg Extension':[3,12],'Leg Curl':[3,12],'Romanian Deadlift':[3,8],'Walking Lunge':[3,10],'Bulgarian Split Squat':[3,10],'Hip Thrust':[3,10],'Hack Squat':[3,10],'Goblet Squat':[3,10],'Standing Calf Raise':[4,12],'Seated Calf Raise':[4,12]
 };
-function migrate(o){(o.days||[]).forEach(d=>(d.acc||[]).forEach(a=>{if(!a.id)a.id=uid();}));return o;}
+function migrate(o){
+  const ds=o.days||[];
+  ds.forEach(d=>(d.acc||[]).forEach(a=>{if(!a.id)a.id=uid();}));
+  // Default light lifts: each day practices the main lift of the day before it in the rotation (Day 1 squat, Day 2 bench, Day 3 deadlift).
+  ds.forEach((d,i)=>{if(!Array.isArray(d.sup))d.sup=ds.length===3?[{id:uid(),lift:ds[(i+2)%3].main}]:[];});
+  if(!(o.restSup>0))o.restSup=90;
+  return o;
+}
 function defaults(){return migrate(rawDefaults());}
 function rawDefaults(){return{v:1,unit:'lb',inc:5,restMain:150,restAcc:75,cycle:1,week:1,
   days:[
@@ -313,6 +326,25 @@ function accRound(a){const step=a.i>0?a.i:S.inc;return x=>Math.max(step,Math.rou
 function findAcc(id){for(const d of S.days){const a=d.acc.find(x=>x.id===id);if(a)return a;}return null;}
 // Weight for `reps` reps that matches `w` for `n` reps (Epley).
 function convertRM(w,n,reps){n=Math.min(Math.max(n,1),20);return w*(1+n/30)/(1+reps/30);}
+function supPreview(d){
+  const wk=WEEKS[S.week-1],u=S.unit;
+  return (d.sup||[]).map(sp=>{
+    const o=S.orm[sp.lift];if(!o)return '';
+    const s=SUP[S.week-1],t=wk.test?'skipped in test week':`${s.length}×${s[0][1]} at ${fmt(rt(o*s[0][0]))} ${u}`;
+    return `<div><span>${esc(sp.lift)} (light)</span><span>${t}</span></div>`;
+  }).join('');
+}
+// Rough session length: each set costs its rest time plus about 40 seconds of lifting, plus 5 minutes of setup.
+function estMin(d){
+  const wk=WEEKS[S.week-1],lift=40;let s=0;
+  if(wk.test)s+=(wk.ramp.length+2)*(S.restMain+lift);
+  else{
+    s+=wk.sets.length*(S.restMain+lift)+2*(60+lift);
+    (d.sup||[]).forEach(sp=>{if(S.orm[sp.lift])s+=SUP[S.week-1].length*(S.restSup+lift);});
+  }
+  d.acc.forEach(a=>{s+=((wk.test&&a.rm)?2:a.s)*(S.restAcc+lift);});
+  return Math.max(10,Math.round((s/60+5)/5)*5);
+}
 function accPreview(d){
   const wk=WEEKS[S.week-1],u=S.unit;
   return d.acc.map(a=>{
@@ -331,6 +363,10 @@ function buildSession(day){
   }else{
     ex.push({n:day.main,main:true,warm:[[rt(orm*.40),5],[rt(orm*.55),3]],sets:wk.sets.map(a=>mkSet(rt(orm*a[0]),a[1],a[0]))});
   }
+  if(!wk.test)(day.sup||[]).forEach(sp=>{
+    const o=S.orm[sp.lift];if(!o)return;
+    ex.push({n:sp.lift+' (light)',sup:sp.lift,main:false,sets:SUP[S.week-1].map(a=>mkSet(rt(o*a[0]),a[1],a[0]))});
+  });
   day.acc.forEach(a=>{
     const rtA=accRound(a);
     if(a.rm){
@@ -413,8 +449,8 @@ function viewToday(){
     h+=`<section class="card day"><div><p class="eyebrow">Day ${i+1} ${pill}</p><div class="nm">${esc(d.name)}</div></div>`;
     h+=isDone?`<span class="meta num">${fmt(Math.round(sessVolume(sess)))} ${S.unit}</span>`
       :`<button class="btn ${isNext||isAct?'primary':''}" data-act="start" data-d="${d.id}">${isAct?'Resume':'Start'}</button>`;
-    h+=`<p class="lift">${esc(d.main)}${wk.test?' max test':''}</p><p class="scheme">${isDone?'Logged '+fmtDate(sess.date,true):schemePreview(d)}</p>`;
-    if(!isDone&&d.acc.length)h+=`<div class="acclist">${accPreview(d)}</div>`;
+    h+=`<p class="lift">${esc(d.main)}${wk.test?' max test':''}${isDone?'':`<span class="eta"> · about ${estMin(d)} min</span>`}</p><p class="scheme">${isDone?'Logged '+fmtDate(sess.date,true):schemePreview(d)}</p>`;
+    if(!isDone&&(d.acc.length||d.sup.length))h+=`<div class="acclist">${supPreview(d)}${accPreview(d)}</div>`;
     h+='</section>';
   });
   const missing=S.days.reduce((n,d)=>n+d.acc.filter(a=>!a.rm).length,0);
@@ -435,9 +471,10 @@ function setupCard(){
 
 function exCard(ex,ei){
   const u=S.unit;
-  let h=`<section class="card ex ${ex.main?'main':''}"><div class="exh"><h2>${esc(ex.n)}</h2>${ex.main?`<span class="pill ${ex.test?'test':'next'}">${ex.test?'Max test':'Main lift'}</span>`:''}</div>`;
+  let h=`<section class="card ex ${ex.main?'main':''}"><div class="exh"><h2>${esc(ex.n)}</h2>${ex.main?`<span class="pill ${ex.test?'test':'next'}">${ex.test?'Max test':'Main lift'}</span>`:ex.sup?'<span class="pill">Light</span>':''}</div>`;
   if(ex.warm&&ex.warm.length)h+=`<p class="meta">Warm-up: ${ex.warm.map(w=>fmt(w[0])+' × '+w[1]).join(' · ')}</p>`;
-  if(!ex.main){
+  if(ex.sup){const hd=S.days.find(x=>x.main===ex.sup);h+=`<p class="meta">Light practice for your ${esc(ex.sup)}. Move the bar fast and stop with plenty left.${hd?' Your heavy day is '+esc(hd.name)+'.':''}</p>`;}
+  if(!ex.main&&!ex.sup){
     const acc=ex.aid?findAcc(ex.aid):null;
     if(acc&&acc.rm)h+=`<p class="meta">Working weight ${fmt(acc.rm)} ${u} for ${acc.r} reps${WEEKS[S.active.week-1].test?'. Today: one max-reps set.':''}</p>`;
     else if(acc)h+=`<p class="meta">Pick a weight you can lift for ${acc.r} reps with a hard last rep. The app builds this lift's plan from what you log.</p>`;
@@ -445,13 +482,13 @@ function exCard(ex,ei){
   if(ex.test)h+='<p class="meta">Ramp-up sets</p>';
   h+=`<div class="sethead"><span></span><span>${u}</span><span></span><span>reps</span><span></span></div>`;
   ex.sets.forEach((s,si)=>{
-    const pl=ex.main?platesText(s.w):'';
+    const pl=ex.main||ex.sup?platesText(s.w):'';
     h+=`<div class="set ${s.done?'done':''}"><span class="idx">${si+1}</span>
       <label class="fld"><input data-e="${ei}" data-s="${si}" data-f="w" inputmode="decimal" value="${s.w===''?'':s.w}" aria-label="Weight, set ${si+1}"><span class="u">${u}</span></label>
       <span class="x">×</span>
       <label class="fld plain"><input data-e="${ei}" data-s="${si}" data-f="r" inputmode="numeric" value="${s.r===''?'':s.r}" aria-label="Reps, set ${si+1}"></label>
       <button class="chk" data-act="toggle" data-e="${ei}" data-s="${si}" aria-pressed="${s.done}" aria-label="Mark set ${si+1} done">${ICON.check}</button>
-      <div class="sub">${s.p?`<span>${+(s.p*100).toFixed(1)}% of ${ex.main?'max':'working weight'}</span>`:''}${s.amrap?'<span>Max reps: go until your form breaks, then log the reps</span>':''}${ex.main?`<span class="plates">${esc(pl)}</span>`:''}</div></div>`;
+      <div class="sub">${s.p?`<span>${+(s.p*100).toFixed(1)}% of ${ex.main||ex.sup?'max':'working weight'}</span>`:''}${s.amrap?'<span>Max reps: go until your form breaks, then log the reps</span>':''}${ex.main||ex.sup?`<span class="plates">${esc(pl)}</span>`:''}</div></div>`;
   });
   h+=`<div class="row"><button class="btn sm" data-act="addset" data-e="${ei}">+ Set</button><button class="btn sm" data-act="rmset" data-e="${ei}">− Set</button></div>`;
   if(ex.tries){
@@ -578,7 +615,13 @@ function viewPlan(){
       <label class="lbl">Day name<input class="txt" data-k="dayname" data-d="${i}" value="${esc(d.name)}"></label>
       <div class="row2"><label class="lbl">Main lift<input class="txt" data-k="main" data-d="${i}" value="${esc(d.main)}"></label>
       <label class="lbl">1RM (${u})<input class="txt" inputmode="decimal" data-k="orm" data-d="${i}" value="${S.orm[d.main]||''}"></label></div>
-      <h3>Other exercises</h3><p class="meta">Each one gets its own weights. Working weight is what you can lift for the reps shown with a hard last rep. Leave it blank and the app sets it from your first session.</p>`;
+      <h3>Light lifts</h3><p class="meta">A short, light set of another day's main lift, so each big lift is practiced twice a week. It is skipped in max test week. Remove any you don't want.</p>`;
+    d.sup.forEach((sp,j)=>{
+      h+=`<div class="supr"><span>${esc(sp.lift)} <small>3 light sets</small></span><button class="rm" data-act="rmsup" data-d="${i}" data-s="${j}" aria-label="Remove light ${esc(sp.lift)}">×</button></div>`;
+    });
+    const supOpts=S.days.map(x=>x.main).filter(m=>m!==d.main&&!d.sup.some(sp=>sp.lift===m));
+    if(supOpts.length)h+=`<label class="lbl">Add a light lift<select class="sel" data-k="supadd" data-d="${i}"><option value="">Choose a lift</option>${supOpts.map(m=>`<option>${esc(m)}</option>`).join('')}</select></label>`;
+    h+=`<h3>Other exercises</h3><p class="meta">Each one gets its own weights. Working weight is what you can lift for the reps shown with a hard last rep. Leave it blank and the app sets it from your first session.</p>`;
     d.acc.forEach((a,j)=>{
       h+=`<div class="accb"><div class="top2"><input class="txt" data-k="accn" data-d="${i}" data-a="${j}" value="${esc(a.n)}" aria-label="Exercise name"><button class="rm" data-act="rmacc" data-d="${i}" data-a="${j}" aria-label="Remove ${esc(a.n)}">×</button></div>
         <div class="quad"><label class="lbl">Sets<input class="txt" inputmode="numeric" data-k="accs" data-d="${i}" data-a="${j}" value="${a.s}"></label>
@@ -593,12 +636,13 @@ function viewPlan(){
   WEEKS.forEach((w,i)=>{
     h+=`<div class="scheme-row"><span class="a">Week ${i+1} · ${w.name}</span><span class="b">${(w.test?w.ramp:w.sets).map(a=>`${+(a[0]*100).toFixed(1)}%×${a[1]}`).join(' · ')}${w.test?' · then max attempts':''}</span></div>`;
   });
-  h+=`<p class="meta">Every other exercise follows its own wave at ${ACCP.map(p=>+(p*100).toFixed(1)+'%').join(' / ')} of its working weight in weeks 1 to 3. In week 4 it gets one max-reps set, and that result sets the next cycle's weight.</p></section>`;
+  h+=`<p class="meta">Every other exercise follows its own wave at ${ACCP.map(p=>+(p*100).toFixed(1)+'%').join(' / ')} of its working weight in weeks 1 to 3. In week 4 it gets one max-reps set, and that result sets the next cycle's weight. Light lifts are ${SUP.map(w=>`3×${w[0][1]} at ${+(w[0][0]*100).toFixed(1)}%`).join(', ')} of that lift's max in weeks 1 to 3, and are skipped in week 4.</p></section>`;
   h+=`<section class="card"><h2>Settings</h2><div class="segs"><button class="seg ${u==='lb'?'on':''}" data-act="unit" data-v="lb">Pounds</button><button class="seg ${u==='kg'?'on':''}" data-act="unit" data-v="kg">Kilograms</button></div>
     <p class="meta">Switching units converts your maxes and logged weights.</p>
     <div class="row2"><label class="lbl">Smallest jump (${u})<select class="sel" data-k="inc">${[1.25,2.5,5].map(v=>`<option ${S.inc===v?'selected':''}>${v}</option>`).join('')}</select></label>
     <label class="lbl">Rest, main lift (sec)<input class="txt" inputmode="numeric" data-k="restMain" value="${S.restMain}"></label></div>
-    <label class="lbl">Rest, accessories (sec)<input class="txt" inputmode="numeric" data-k="restAcc" value="${S.restAcc}"></label></section>`;
+    <div class="row2"><label class="lbl">Rest, accessories (sec)<input class="txt" inputmode="numeric" data-k="restAcc" value="${S.restAcc}"></label>
+    <label class="lbl">Rest, light lifts (sec)<input class="txt" inputmode="numeric" data-k="restSup" value="${S.restSup}"></label></div></section>`;
   h+=`<section class="card"><h2>Backup</h2><p class="meta">Your log lives in this browser. Copy a backup now and then, especially before clearing browser data.</p>
     <div class="row"><button class="btn sm" data-act="copybk">Copy backup</button><button class="btn sm" data-act="dlbk">Download file</button><label class="btn sm" style="cursor:pointer">Load file<input type="file" accept=".json,application/json" data-k="bkfile" hidden></label></div>
     <label class="lbl">Restore from pasted backup<textarea class="txt" id="bktext" placeholder="Paste backup text here"></textarea></label>
@@ -709,7 +753,7 @@ const ACT={
   toggle:b=>{
     const ex=S.active.ex[+b.dataset.e],s=ex.sets[+b.dataset.s];
     s.done=!s.done;
-    if(s.done)startRest(ex.main?S.restMain:S.restAcc);
+    if(s.done)startRest(ex.main?S.restMain:ex.sup?S.restSup:S.restAcc);
     save();render();
   },
   addset:b=>{const ex=S.active.ex[+b.dataset.e],l=ex.sets[ex.sets.length-1];ex.sets.push({w:l?l.w:'',r:l?l.r:'',p:null,done:false});save();render();},
@@ -733,6 +777,7 @@ const ACT={
     const i=S.sessions.findIndex(s=>s.id===b.dataset.id);if(i>=0)S.sessions.splice(i,1);
     UI.confirm=null;save();render();toast('Workout deleted');
   },
+  rmsup:b=>{S.days[+b.dataset.d].sup.splice(+b.dataset.s,1);save();render();},
   addacc:b=>{
     const i=+b.dataset.d,inp=$('newex-'+i),name=inp.value.trim();
     if(!name){toast('Type an exercise name first');return;}
@@ -774,7 +819,7 @@ $('app').addEventListener('input',e=>{
     if(t.dataset.t!==undefined){ex.tries[+t.dataset.t].w=num(t.value);}
     else{ex.sets[+t.dataset.s][t.dataset.f]=num(t.value);}
     const row=t.closest('.set,.try'),pl=row&&row.querySelector('.plates');
-    if(pl&&t.dataset.f==='w'&&ex.main)pl.textContent=platesText(num(t.value));
+    if(pl&&t.dataset.f==='w'&&(ex.main||ex.sup))pl.textContent=platesText(num(t.value));
     save();
   }else if(t.id==='wnote'&&S.active){S.active.note=t.value;save();}
   else if(t.dataset.est){
@@ -798,6 +843,7 @@ $('app').addEventListener('change',e=>{
       if(S.days.some(x=>x!==d&&x.main===nn)){toast('Another day already uses that lift');t.value=d.main;break;}
       if(S.orm[d.main]!=null){S.orm[nn]=S.orm[d.main];delete S.orm[d.main];}
       S.ormLog.forEach(l=>{if(l.lift===d.main)l.lift=nn;});
+      S.days.forEach(x=>x.sup.forEach(sp=>{if(sp.lift===d.main)sp.lift=nn;}));
       d.main=nn;break;}
     case 'orm':{const v=num(t.value);if(v>0&&v!==S.orm[d.main]){S.orm[d.main]=v;S.ormLog.push({d:todayISO(),lift:d.main,orm:v,src:'manual',cycle:S.cycle});}else t.value=S.orm[d.main]||'';break;}
     case 'accn':if(t.value.trim())a.n=t.value.trim();else t.value=a.n;break;
@@ -808,6 +854,8 @@ $('app').addEventListener('change',e=>{
     case 'inc':S.inc=+t.value;break;
     case 'restMain':S.restMain=clampInt(t.value,10,900,S.restMain);t.value=S.restMain;break;
     case 'restAcc':S.restAcc=clampInt(t.value,10,900,S.restAcc);t.value=S.restAcc;break;
+    case 'restSup':S.restSup=clampInt(t.value,10,900,S.restSup);t.value=S.restSup;break;
+    case 'supadd':if(t.value){d.sup.push({id:uid(),lift:t.value});save();render();}return;
     case 'week':S.week=+t.value;save();render();return;
     case 'progex':UI.progEx=t.value;render();return;
     case 'bkfile':{const f=t.files&&t.files[0];if(f){const r=new FileReader();r.onload=()=>doRestore(String(r.result));r.readAsText(f);}return;}
